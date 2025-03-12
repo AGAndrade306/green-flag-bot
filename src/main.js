@@ -23,7 +23,7 @@ criarTabelaPedidos();
 
 const pedidosPorCliente = {};
 const app = express();
-app.use(express.json()); // Para parsear o corpo das requisições JSON
+app.use(express.json());
 
 const imagensCardapio = {
     "pepperoncino": "pepperoncino.jpeg",
@@ -51,34 +51,34 @@ async function enviarImagem(msg, imagePath, caption) {
     }
 }
 
-// Webhook para receber notificações do Mercado Pago
 app.post('/webhook', async (req, res) => {
     const notification = req.body;
     console.log("📥 Webhook recebido:", JSON.stringify(notification, null, 2));
 
     if (notification.type === 'payment' && notification.data && notification.data.id) {
         const paymentId = notification.data.id;
-        const clienteId = notification.data.external_reference || null; // Usaremos isso para associar ao cliente
+        const clienteId = notification.external_reference || null; // Alterado para pegar direto do body
 
         if (!clienteId) {
             console.error("❌ Webhook sem external_reference. Não posso identificar o cliente.");
             return res.status(400).send("Missing external_reference");
         }
 
-        // Aqui você pode consultar a API do Mercado Pago para mais detalhes, se necessário
-        const status = notification.action === 'payment.updated' && notification.data.status === 'approved' ? 'approved' : 'pending';
+        console.log(`🔍 Processando pagamento ${paymentId} para cliente ${clienteId}`);
+        const status = notification.action === 'payment.updated' ? notification.live_mode ? 'approved' : 'pending' : 'unknown';
 
         if (status === 'approved') {
             console.log(`✅ Pagamento ${paymentId} confirmado para ${clienteId}`);
-            await salvarHistoricoPedido(clienteId, null, null, 'approved'); // Atualiza o status no histórico
+            await salvarHistoricoPedido(clienteId, null, null, 'approved');
             await client.sendMessage(`${clienteId}@c.us`, "🎉 Pagamento confirmado! Seu pedido está sendo preparado.");
+        } else {
+            console.log(`⏳ Pagamento ${paymentId} ainda pendente para ${clienteId}`);
         }
     }
 
     res.status(200).send("Webhook recebido");
 });
 
-// Inicia o servidor na porta 3000 (ou outra de sua escolha)
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🌐 Servidor webhook rodando na porta ${PORT}`);
@@ -140,7 +140,7 @@ client.on('message', async msg => {
             }
         }
 
-        if (userMessage.includes("pix") || userMessage.includes("cartão")) {
+        if (userMessage.includes("pix")) {
             const valorPedido = pedidosPorCliente[clienteId]?.valorTotal || await obterValorPedido(clienteId);
 
             if (!valorPedido || valorPedido <= 0) {
@@ -148,30 +148,34 @@ client.on('message', async msg => {
                 return;
             }
 
-            if (userMessage.includes("pix")) {
-                const pixData = await gerarQRCodePix(clienteId, valorPedido);
-                if (!pixData) {
-                    await client.sendMessage(msg.from, "⚠️ Erro ao gerar o PIX. Tente outro método ou fale com o suporte.");
-                    return;
-                }
-
-                await client.sendMessage(msg.from, "💳 PIX Copia e Cola:");
-                await client.sendMessage(msg.from, pixData.pixCopiaCola);
-
-                await salvarHistoricoPedido(clienteId, valorPedido, 'PIX', 'pending');
-                await client.sendMessage(msg.from, 'Aguardando pagamento. Irei atualizar você assim que for confirmado.');
+            const pixData = await gerarQRCodePix(clienteId, valorPedido);
+            if (!pixData) {
+                await client.sendMessage(msg.from, "⚠️ Erro ao gerar o PIX. Tente outro método ou fale com o suporte.");
+                return;
             }
 
-            if (userMessage.includes("cartão")) {
-                const linkPagamento = await gerarLinkPagamentoCartao(clienteId, valorPedido);
-                if (!linkPagamento) {
-                    await client.sendMessage(msg.from, "⚠️ Erro ao gerar o link de pagamento com cartão. Tente outro método ou fale com o suporte.");
-                    return;
-                }
-                await client.sendMessage(msg.from, `🔗 Link para pagamento com cartão: ${linkPagamento}`);
-                await salvarHistoricoPedido(clienteId, valorPedido, 'Cartão', 'pending');
-                await client.sendMessage(msg.from, 'Aguardando pagamento. Irei atualizar você assim que for confirmado.');
+            await client.sendMessage(msg.from, "💳 PIX Copia e Cola:");
+            await client.sendMessage(msg.from, pixData.pixCopiaCola);
+            await salvarHistoricoPedido(clienteId, valorPedido, 'PIX', 'pending');
+            await client.sendMessage(msg.from, 'Aguardando pagamento. Irei atualizar você assim que for confirmado.');
+        }
+
+        if (userMessage.includes("cartão")) {
+            const valorPedido = pedidosPorCliente[clienteId]?.valorTotal || await obterValorPedido(clienteId);
+
+            if (!valorPedido || valorPedido <= 0) {
+                await client.sendMessage(msg.from, "⚠️ Nenhum pedido pendente encontrado para pagamento.");
+                return;
             }
+
+            const linkPagamento = await gerarLinkPagamentoCartao(clienteId, valorPedido);
+            if (!linkPagamento) {
+                await client.sendMessage(msg.from, "⚠️ Erro ao gerar o link de pagamento com cartão. Tente outro método ou fale com o suporte.");
+                return;
+            }
+            await client.sendMessage(msg.from, `🔗 Link para pagamento com cartão: ${linkPagamento}`);
+            await salvarHistoricoPedido(clienteId, valorPedido, 'Cartão', 'pending');
+            await client.sendMessage(msg.from, 'Aguardando pagamento. Irei atualizar você assim que for confirmado.');
         }
     } catch (error) {
         console.error(`❌ Erro ao processar mensagem de ${clienteId}:`, error);
