@@ -6,6 +6,7 @@ const { MessageMedia } = require('whatsapp-web.js');
 const client = require('./whatsapp');
 const { criarTabelaPedidos, salvarPedido, obterValorPedido, salvarHistoricoPedido } = require('./database');
 const { consultarAssistant } = require('./openai');
+const { gerarQRCodePix, gerarLinkPagamentoCartao } = require('./payment'); // Adicionada esta linha
 const { MercadoPagoConfig, MerchantOrder } = require('mercadopago');
 
 const mpClient = new MercadoPagoConfig({
@@ -196,6 +197,7 @@ client.on('message', async msg => {
             await client.sendMessage(msg.from, pixData.pixCopiaCola);
             await salvarHistoricoPedido(clienteId, valorPedido, 'PIX', 'pending');
             await client.sendMessage(msg.from, 'Aguardando pagamento. Irei atualizar você assim que for confirmado.');
+            console.log(`📤 Mensagem enviada para ${clienteId}: 'Aguardando pagamento. Irei atualizar você assim que for confirmado.'`);
         }
 
         if (userMessage.includes("cartão")) {
@@ -214,6 +216,7 @@ client.on('message', async msg => {
             await client.sendMessage(msg.from, `🔗 Link para pagamento com cartão: ${linkPagamento}`);
             await salvarHistoricoPedido(clienteId, valorPedido, 'Cartão', 'pending');
             await client.sendMessage(msg.from, 'Aguardando pagamento. Irei atualizar você assim que for confirmado.');
+            console.log(`📤 Mensagem enviada para ${clienteId}: 'Aguardando pagamento. Irei atualizar você assim que for confirmado.'`);
         }
     } catch (error) {
         console.error(`❌ Erro ao processar mensagem de ${clienteId}:`, error);
