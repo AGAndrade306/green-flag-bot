@@ -30,9 +30,9 @@ async function gerarLinkPagamentoCartao(clienteId, valor) {
                 },
             ],
             back_urls: {
-                success: 'https://sua-hamburgueria.com/sucesso',
-                failure: 'https://sua-hamburgueria.com/cancelado',
-                pending: 'https://sua-hamburgueria.com/pendente',
+                success: 'https://sprout-bot-ymii.onrender.com/success', // Atualizado
+                failure: 'https://sprout-bot-ymii.onrender.com/failure', // Atualizado
+                pending: 'https://sprout-bot-ymii.onrender.com/pending', // Atualizado
             },
             auto_return: 'approved',
             payment_methods: {
@@ -40,8 +40,8 @@ async function gerarLinkPagamentoCartao(clienteId, valor) {
                 excluded_payment_types: [],
                 installments: 12,
             },
-            notification_url: 'http://localhost:3000/webhook', // URL do seu webhook
-            external_reference: clienteId, // Identificador único para rastrear o cliente
+            notification_url: 'https://sprout-bot-ymii.onrender.com/webhook',
+            external_reference: clienteId,
         };
 
         console.log("Requisição enviada ao Mercado Pago para Preference:", JSON.stringify(preferenceData, null, 2));
@@ -76,7 +76,7 @@ async function gerarQRCodePix(clienteId, valor) {
             description: `Pedido #${clienteId}`,
             payment_method_id: 'pix',
             date_of_expiration: new Date(Date.now() + 3600 * 1000).toISOString(),
-            notification_url: 'http://localhost:3000/webhook', // URL do seu webhook
+            notification_url: 'https://sprout-bot-ymii.onrender.com/webhook',
             payer: {
                 email: 'cliente@exemplo.com',
                 identification: { type: 'CPF', number: '12345678909' }
@@ -92,7 +92,7 @@ async function gerarQRCodePix(clienteId, valor) {
                     }
                 ]
             },
-            external_reference: clienteId, // Identificador único para rastrear o cliente
+            external_reference: clienteId,
         };
 
         console.log("Requisição enviada ao Mercado Pago:", JSON.stringify(paymentData, null, 2));
