@@ -101,11 +101,11 @@ app.post('/webhook', async (req, res) => {
             try {
                 const payment = await paymentClient.get({ id: paymentId });
                 console.log("🔍 Resposta da API do pagamento:", JSON.stringify(payment, null, 2));
-                if (!payment.body || typeof payment.body !== 'object') {
+                if (!payment || typeof payment !== 'object') {
                     console.error("❌ Resposta da API inválida ou vazia.");
                     return res.status(400).send("Invalid payment response");
                 }
-                clienteId = payment.body.external_reference || null;
+                clienteId = payment.external_reference || null;
                 if (!clienteId) {
                     console.error("❌ Pagamento consultado sem external_reference. Não posso identificar o cliente.");
                     return res.status(400).send("Missing external_reference");
@@ -140,13 +140,13 @@ app.post('/webhook', async (req, res) => {
             const order = await merchantOrderClient.get({ merchantOrderId: orderId });
             console.log("📦 Detalhes do merchant_order:", JSON.stringify(order, null, 2));
 
-            const clienteId = order.body.external_reference || null;
+            const clienteId = order.body?.external_reference || order.external_reference || null;
             if (!clienteId) {
                 console.error("❌ Merchant order sem external_reference. Não posso identificar o cliente.");
                 return res.status(400).send("Missing external_reference");
             }
 
-            const payments = order.body.payments || [];
+            const payments = order.body?.payments || order.payments || [];
             for (const payment of payments) {
                 const paymentId = payment.id;
                 const pedido = await obterPedidoPorPaymentId(paymentId);
@@ -174,11 +174,11 @@ app.post('/webhook', async (req, res) => {
             const paymentId = notification.resource;
             const payment = await paymentClient.get({ id: paymentId });
             console.log("🔍 Resposta da API do pagamento:", JSON.stringify(payment, null, 2));
-            if (!payment.body || typeof payment.body !== 'object') {
+            if (!payment || typeof payment !== 'object') {
                 console.error("❌ Resposta da API inválida ou vazia.");
                 return res.status(400).send("Invalid payment response");
             }
-            const clienteId = payment.body.external_reference || null;
+            const clienteId = payment.external_reference || null;
             if (!clienteId) {
                 console.error("❌ Pagamento consultado sem external_reference. Não posso identificar o cliente.");
                 return res.status(400).send("Missing external_reference");
@@ -191,7 +191,7 @@ app.post('/webhook', async (req, res) => {
                 return res.status(400).send("Payment does not match any pending order");
             }
 
-            const status = payment.body.status === 'approved' ? 'approved' : 'pending';
+            const status = payment.status === 'approved' ? 'approved' : 'pending';
             if (status === 'approved') {
                 console.log(`✅ Pagamento ${paymentId} confirmado para ${clienteId}`);
                 await salvarHistoricoPedido(clienteId, pedido.valor, pedido.metodoPagamento, 'approved', paymentId);
