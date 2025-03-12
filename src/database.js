@@ -1,167 +1,128 @@
 const sqlite3 = require('sqlite3').verbose();
-
-const db = new sqlite3.Database('./clientes.db', (err) => {
-    if (err) {
-        console.error('❌ Erro ao conectar ao banco de dados:', err);
-        process.exit(1);
-    }
-    console.log('📊 Banco de dados conectado com sucesso.');
-});
+const db = new sqlite3.Database('pedidos.db');
 
 function criarTabelaPedidos() {
-    // Tabela de pedidos
     db.run(`
         CREATE TABLE IF NOT EXISTS pedidos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            numero_cliente TEXT NOT NULL,
-            valor REAL NOT NULL,
-            status TEXT DEFAULT 'pendente',
-            data_pedido DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `, (err) => {
-        if (err) console.error('❌ Erro ao criar tabela pedidos:', err);
-        else console.log('✅ Tabela pedidos criada ou já existente.');
-    });
-
-    // Tabela de histórico de pedidos
-    db.run(`
-        CREATE TABLE IF NOT EXISTS historico_pedidos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            numero_cliente TEXT NOT NULL,
+            clienteId TEXT,
+            nomeCliente TEXT,
+            endereco TEXT,
+            itens TEXT,  -- Armazenado como JSON: [{"item": "pepperoncino", "quantidade": 2}, ...]
             valor REAL,
-            metodo_pagamento TEXT,
-            status TEXT DEFAULT 'pending',
-            data_pedido DATETIME DEFAULT CURRENT_TIMESTAMP,
-            expires_at DATETIME
+            metodoPagamento TEXT,
+            status TEXT,
+            paymentId TEXT,
+            dataExpiracao TEXT,
+            dataCriacao TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (clienteId, paymentId)
         )
-    `, (err) => {
-        if (err) console.error('❌ Erro ao criar tabela historico_pedidos:', err);
-        else console.log('✅ Tabela historico_pedidos criada ou já existente.');
-    });
-
-    // Verifica e adiciona a coluna 'data_pedido' se necessário
-    db.all("PRAGMA table_info(pedidos)", (err, rows) => {
-        if (err) {
-            console.error('❌ Erro ao verificar colunas da tabela pedidos:', err);
-            return;
-        }
-        if (!rows.some(row => row.name === 'data_pedido')) {
-            db.run('ALTER TABLE pedidos ADD COLUMN data_pedido DATETIME DEFAULT CURRENT_TIMESTAMP', (err) => {
-                if (err) console.error('❌ Erro ao adicionar coluna data_pedido:', err);
-                else console.log('✅ Coluna data_pedido adicionada à tabela pedidos.');
-            });
-        }
-    });
-
-    // Verifica e adiciona a coluna 'expires_at' se necessário
-    db.all("PRAGMA table_info(historico_pedidos)", (err, rows) => {
-        if (err) {
-            console.error('❌ Erro ao verificar colunas da tabela historico_pedidos:', err);
-            return;
-        }
-        if (!rows.some(row => row.name === 'expires_at')) {
-            db.run('ALTER TABLE historico_pedidos ADD COLUMN expires_at DATETIME', (err) => {
-                if (err) console.error('❌ Erro ao adicionar coluna expires_at:', err);
-                else console.log('✅ Coluna expires_at adicionada à tabela historico_pedidos.');
-            });
-        }
-    });
-
-    // Verifica e adiciona a coluna 'status' se necessário
-    db.all("PRAGMA table_info(historico_pedidos)", (err, rows) => {
-        if (err) {
-            console.error('❌ Erro ao verificar colunas da tabela historico_pedidos:', err);
-            return;
-        }
-        if (!rows.some(row => row.name === 'status')) {
-            db.run('ALTER TABLE historico_pedidos ADD COLUMN status TEXT DEFAULT "pending"', (err) => {
-                if (err) console.error('❌ Erro ao adicionar coluna status:', err);
-                else console.log('✅ Coluna status adicionada à tabela historico_pedidos.');
-            });
-        }
-    });
+    `);
 }
 
-async function salvarPedido(clienteId, valor) {
-    if (!clienteId || valor <= 0) {
-        console.error(`❌ Dados inválidos para salvar pedido: clienteId=${clienteId}, valor=${valor}`);
-        return false;
-    }
-    return new Promise((resolve) => {
+function salvarPedido(clienteId, nomeCliente, itens, valorTotal) {
+    return new Promise((resolve, reject) => {
+        const itensJson = JSON.stringify(itens);
         db.run(
-            'INSERT INTO pedidos (numero_cliente, valor, status) VALUES (?, ?, "pendente")',
-            [clienteId, valor],
+            `INSERT INTO pedidos (clienteId, nomeCliente, itens, valor, metodoPagamento, status, paymentId, dataExpiracao) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(clienteId, paymentId) 
+             DO UPDATE SET nomeCliente = ?, itens = ?, valor = ?, metodoPagamento = ?, status = ?, dataExpiracao = ?`,
+            [clienteId, nomeCliente, itensJson, valorTotal, null, 'pending', null, null, nomeCliente, itensJson, valorTotal, null, 'pending', null],
             (err) => {
                 if (err) {
                     console.error(`❌ Erro ao salvar pedido para ${clienteId}:`, err);
-                    return resolve(false);
+                    reject(err);
+                } else {
+                    resolve(true);
                 }
-                console.log(`✅ Pedido salvo para ${clienteId}: R$ ${valor.toFixed(2)}`);
-                resolve(true);
             }
         );
     });
 }
 
-async function obterValorPedido(clienteId) {
-    if (!clienteId) {
-        console.error('❌ clienteId não fornecido para buscar valor do pedido');
-        return 0;
-    }
-    return new Promise((resolve) => {
+function obterValorPedido(clienteId) {
+    return new Promise((resolve, reject) => {
         db.get(
-            'SELECT valor FROM pedidos WHERE numero_cliente = ? AND status = "pendente" ORDER BY id DESC LIMIT 1',
+            `SELECT valor FROM pedidos WHERE clienteId = ? AND status = 'pending'`,
             [clienteId],
             (err, row) => {
                 if (err) {
-                    console.error(`❌ Erro ao buscar valor do pedido para ${clienteId}:`, err);
-                    return resolve(0);
+                    console.error(`❌ Erro ao obter valor do pedido para ${clienteId}:`, err);
+                    reject(err);
+                } else {
+                    resolve(row ? row.valor : null);
                 }
-                resolve(row ? row.valor : 0);
             }
         );
     });
 }
 
-async function salvarHistoricoPedido(clienteId, valor, metodoPagamento, status = 'pending') {
-    if (!clienteId) {
-        console.error(`❌ Dados inválidos para salvar histórico: clienteId=${clienteId}`);
-        return false;
-    }
-    // Se valor e metodoPagamento forem null (caso do webhook atualizando status), não calcular expires_at
-    const expiresAt = (valor && metodoPagamento) ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : null;
-
-    return new Promise((resolve) => {
-        // Se valor e metodoPagamento forem fornecidos, insere um novo registro
-        if (valor && metodoPagamento) {
-            db.run(
-                'INSERT INTO historico_pedidos (numero_cliente, valor, metodo_pagamento, status, expires_at) VALUES (?, ?, ?, ?, ?)',
-                [clienteId, valor, metodoPagamento, status, expiresAt],
-                (err) => {
-                    if (err) {
-                        console.error(`❌ Erro ao salvar histórico do pedido para ${clienteId}:`, err);
-                        return resolve(false);
-                    }
-                    console.log(`✅ Histórico salvo para ${clienteId}: R$ ${valor ? valor.toFixed(2) : 'N/A'} (${metodoPagamento}), status: ${status}, expira em ${expiresAt || 'N/A'}`);
+function salvarHistoricoPedido(clienteId, nomeCliente, endereco, itens, valor, metodoPagamento, status, paymentId, dataExpiracao = null) {
+    return new Promise((resolve, reject) => {
+        const itensJson = JSON.stringify(itens);
+        db.run(
+            `INSERT INTO pedidos (clienteId, nomeCliente, endereco, itens, valor, metodoPagamento, status, paymentId, dataExpiracao) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(clienteId, paymentId) 
+             DO UPDATE SET nomeCliente = ?, endereco = ?, itens = ?, valor = ?, metodoPagamento = ?, status = ?, dataExpiracao = ?`,
+            [clienteId, nomeCliente, endereco, itensJson, valor, metodoPagamento, status, paymentId, dataExpiracao, 
+             nomeCliente, endereco, itensJson, valor, metodoPagamento, status, dataExpiracao],
+            (err) => {
+                if (err) {
+                    console.error(`❌ Erro ao salvar histórico para ${clienteId}:`, err);
+                    reject(err);
+                } else {
+                    console.log(`✅ Histórico salvo para ${clienteId}: R$ ${valor} (${metodoPagamento}), status: ${status}, paymentId: ${paymentId}, expira em ${dataExpiracao}`);
                     resolve(true);
                 }
-            );
-        } else {
-            // Se não houver valor ou metodoPagamento, atualiza o status do último pedido pendente
-            db.run(
-                'UPDATE historico_pedidos SET status = ? WHERE numero_cliente = ? AND status = "pending" ORDER BY id DESC LIMIT 1',
-                [status, clienteId],
-                (err) => {
-                    if (err) {
-                        console.error(`❌ Erro ao atualizar status do histórico para ${clienteId}:`, err);
-                        return resolve(false);
-                    }
-                    console.log(`✅ Status do histórico atualizado para ${clienteId}: ${status}`);
-                    resolve(true);
-                }
-            );
-        }
+            }
+        );
     });
 }
 
-module.exports = { criarTabelaPedidos, salvarPedido, obterValorPedido, salvarHistoricoPedido };
+function obterPedidoPorPaymentId(paymentId) {
+    return new Promise((resolve, reject) => {
+        db.get(
+            `SELECT * FROM pedidos WHERE paymentId = ? AND status = 'pending'`,
+            [paymentId],
+            (err, row) => {
+                if (err) {
+                    console.error(`❌ Erro ao obter pedido por paymentId ${paymentId}:`, err);
+                    reject(err);
+                } else {
+                    if (row) {
+                        row.itens = JSON.parse(row.itens || '[]');
+                    }
+                    resolve(row || null);
+                }
+            }
+        );
+    });
+}
+
+function obterHistoricoPedidos(clienteId) {
+    return new Promise((resolve, reject) => {
+        db.all(
+            `SELECT * FROM pedidos WHERE clienteId = ? ORDER BY dataCriacao DESC`,
+            [clienteId],
+            (err, rows) => {
+                if (err) {
+                    console.error(`❌ Erro ao obter histórico de pedidos para ${clienteId}:`, err);
+                    reject(err);
+                } else {
+                    rows.forEach(row => {
+                        row.itens = JSON.parse(row.itens || '[]');
+                    });
+                    resolve(rows);
+                }
+            }
+        );
+    });
+}
+
+module.exports = {
+    criarTabelaPedidos,
+    salvarPedido,
+    obterValorPedido,
+    salvarHistoricoPedido,
+    obterPedidoPorPaymentId,
+    obterHistoricoPedidos
+};
