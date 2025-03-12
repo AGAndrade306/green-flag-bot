@@ -60,20 +60,26 @@ async function enviarImagem(msg, imagePath, caption) {
 }
 
 function verifyWebhookSignature(req, secret) {
-    const signature = req.headers['x-signature'] || req.headers['x-signature-sha256'];
-    if (!signature) {
+    const signatureHeader = req.headers['x-signature'] || req.headers['x-signature-sha256'];
+    if (!signatureHeader) {
         console.error("⚠️ Assinatura do webhook não encontrada no cabeçalho.");
         return false;
     }
 
+    // O cabeçalho X-Signature vem no formato: ts=<timestamp>,v1=<hash>
+    const signatureParts = signatureHeader.split(',');
+    const signatureTimestamp = signatureParts.find(part => part.startsWith('ts=')).split('=')[1];
+    const signatureV1 = signatureParts.find(part => part.startsWith('v1=')).split('=')[1];
+
+    // O Mercado Pago usa o corpo da requisição para calcular o hash
     const computedSignature = crypto
         .createHmac('sha256', secret)
         .update(JSON.stringify(req.body))
         .digest('hex');
 
-    console.log(`🔍 Assinatura recebida: ${signature}`);
+    console.log(`🔍 Assinatura recebida (v1): ${signatureV1}`);
     console.log(`🔍 Assinatura computada: ${computedSignature}`);
-    return signature === computedSignature;
+    return signatureV1 === computedSignature;
 }
 
 app.post('/webhook', async (req, res) => {
@@ -89,7 +95,7 @@ app.post('/webhook', async (req, res) => {
 
     if (notification.type === 'payment' && notification.data && notification.data.id) {
         const paymentId = notification.data.id;
-        const clienteId = notification.external_reference || null;
+        let clienteId = notification.external_reference || null;
 
         if (!clienteId) {
             console.error("❌ Webhook sem external_reference. Tentando consultar pagamento...");
@@ -112,12 +118,19 @@ app.post('/webhook', async (req, res) => {
             }
         }
 
+        // Verificar se o paymentId corresponde a um pedido pendente
+        const pedido = await obterPedidoPorPaymentId(paymentId);
+        if (!pedido || pedido.clienteId !== clienteId) {
+            console.error(`❌ Pagamento ${paymentId} não corresponde a nenhum pedido pendente para o cliente ${clienteId}.`);
+            return res.status(400).send("Payment does not match any pending order");
+        }
+
         console.log(`🔍 Processando pagamento ${paymentId} para cliente ${clienteId}`);
         const status = notification.action === 'payment.updated' ? (notification.live_mode ? 'approved' : 'pending') : 'unknown';
 
         if (status === 'approved') {
             console.log(`✅ Pagamento ${paymentId} confirmado para ${clienteId}`);
-            await salvarHistoricoPedido(clienteId, null, null, 'approved');
+            await salvarHistoricoPedido(clienteId, pedido.valor, pedido.metodoPagamento, 'approved', paymentId);
             await client.sendMessage(`${clienteId}@c.us`, "🎉 Pagamento confirmado! Seu pedido está sendo preparado.");
         } else {
             console.log(`⏳ Pagamento ${paymentId} ainda pendente para ${clienteId}`);
@@ -138,12 +151,17 @@ app.post('/webhook', async (req, res) => {
             const payments = order.body.payments || [];
             for (const payment of payments) {
                 const paymentId = payment.id;
-                const status = payment.status === 'approved' ? 'approved' : 'pending';
+                const pedido = await obterPedidoPorPaymentId(paymentId);
+                if (!pedido || pedido.clienteId !== clienteId) {
+                    console.error(`❌ Pagamento ${paymentId} não corresponde a nenhum pedido pendente para o cliente ${clienteId}.`);
+                    continue;
+                }
 
+                const status = payment.status === 'approved' ? 'approved' : 'pending';
                 console.log(`🔍 Pagamento ${paymentId} no merchant_order para cliente ${clienteId}: status ${status}`);
                 if (status === 'approved') {
                     console.log(`✅ Pagamento ${paymentId} confirmado para ${clienteId}`);
-                    await salvarHistoricoPedido(clienteId, null, null, 'approved');
+                    await salvarHistoricoPedido(clienteId, pedido.valor, pedido.metodoPagamento, 'approved', paymentId);
                     await client.sendMessage(`${clienteId}@c.us`, "🎉 Pagamento confirmado! Seu pedido está sendo preparado.");
                 } else {
                     console.log(`⏳ Pagamento ${paymentId} ainda pendente para ${clienteId}`);
@@ -168,11 +186,17 @@ app.post('/webhook', async (req, res) => {
                 return res.status(400).send("Missing external_reference");
             }
             console.log(`🔍 external_reference recuperado do pagamento: ${clienteId}`);
-            const status = payment.body.status === 'approved' ? 'approved' : 'pending';
 
+            const pedido = await obterPedidoPorPaymentId(paymentId);
+            if (!pedido || pedido.clienteId !== clienteId) {
+                console.error(`❌ Pagamento ${paymentId} não corresponde a nenhum pedido pendente para o cliente ${clienteId}.`);
+                return res.status(400).send("Payment does not match any pending order");
+            }
+
+            const status = payment.body.status === 'approved' ? 'approved' : 'pending';
             if (status === 'approved') {
                 console.log(`✅ Pagamento ${paymentId} confirmado para ${clienteId}`);
-                await salvarHistoricoPedido(clienteId, null, null, 'approved');
+                await salvarHistoricoPedido(clienteId, pedido.valor, pedido.metodoPagamento, 'approved', paymentId);
                 await client.sendMessage(`${clienteId}@c.us`, "🎉 Pagamento confirmado! Seu pedido está sendo preparado.");
             } else {
                 console.log(`⏳ Pagamento ${paymentId} ainda pendente para ${clienteId}`);
@@ -262,9 +286,10 @@ client.on('message', async msg => {
                 return;
             }
 
+            const paymentId = pixData.paymentId; // Supondo que gerarQRCodePix retorna o paymentId
             await client.sendMessage(msg.from, "💳 PIX Copia e Cola:");
             await client.sendMessage(msg.from, pixData.pixCopiaCola);
-            await salvarHistoricoPedido(clienteId, valorPedido, 'PIX', 'pending');
+            await salvarHistoricoPedido(clienteId, valorPedido, 'PIX', 'pending', paymentId);
             await client.sendMessage(msg.from, 'Aguardando pagamento. Irei atualizar você assim que for confirmado.');
             console.log(`📤 Mensagem enviada para ${clienteId}: 'Aguardando pagamento. Irei atualizar você assim que for confirmado.'`);
         }
@@ -282,8 +307,9 @@ client.on('message', async msg => {
                 await client.sendMessage(msg.from, "⚠️ Erro ao gerar o link de pagamento com cartão. Tente outro método ou fale com o suporte.");
                 return;
             }
-            await client.sendMessage(msg.from, `🔗 Link para pagamento com cartão: ${linkPagamento}`);
-            await salvarHistoricoPedido(clienteId, valorPedido, 'Cartão', 'pending');
+            const paymentId = linkPagamento.paymentId; // Supondo que gerarLinkPagamentoCartao retorna o paymentId
+            await client.sendMessage(msg.from, `🔗 Link para pagamento com cartão: ${linkPagamento.link}`);
+            await salvarHistoricoPedido(clienteId, valorPedido, 'Cartão', 'pending', paymentId);
             await client.sendMessage(msg.from, 'Aguardando pagamento. Irei atualizar você assim que for confirmado.');
             console.log(`📤 Mensagem enviada para ${clienteId}: 'Aguardando pagamento. Irei atualizar você assim que for confirmado.'`);
         }
