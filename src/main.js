@@ -6,7 +6,12 @@ const { MessageMedia } = require('whatsapp-web.js');
 const client = require('./whatsapp');
 const { criarTabelaPedidos, salvarPedido, obterValorPedido, salvarHistoricoPedido } = require('./database');
 const { consultarAssistant } = require('./openai');
-const { gerarQRCodePix, gerarLinkPagamentoCartao } = require('./payment');
+const { MercadoPagoConfig, MerchantOrder } = require('mercadopago');
+
+const mpClient = new MercadoPagoConfig({
+    accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN,
+});
+const merchantOrderClient = new MerchantOrder(mpClient);
 
 console.log("🔍 Iniciando bot...");
 console.log("🔍 Caminho do processo:", process.cwd());
@@ -52,12 +57,13 @@ async function enviarImagem(msg, imagePath, caption) {
 }
 
 app.post('/webhook', async (req, res) => {
+    console.log("🔍 Recebendo webhook...");
     const notification = req.body;
     console.log("📥 Webhook recebido:", JSON.stringify(notification, null, 2));
 
     if (notification.type === 'payment' && notification.data && notification.data.id) {
         const paymentId = notification.data.id;
-        const clienteId = notification.external_reference || null; // Alterado para pegar direto do body
+        const clienteId = notification.external_reference || null;
 
         if (!clienteId) {
             console.error("❌ Webhook sem external_reference. Não posso identificar o cliente.");
@@ -65,7 +71,7 @@ app.post('/webhook', async (req, res) => {
         }
 
         console.log(`🔍 Processando pagamento ${paymentId} para cliente ${clienteId}`);
-        const status = notification.action === 'payment.updated' ? notification.live_mode ? 'approved' : 'pending' : 'unknown';
+        const status = notification.action === 'payment.updated' ? (notification.live_mode ? 'approved' : 'pending') : 'unknown';
 
         if (status === 'approved') {
             console.log(`✅ Pagamento ${paymentId} confirmado para ${clienteId}`);
@@ -74,6 +80,38 @@ app.post('/webhook', async (req, res) => {
         } else {
             console.log(`⏳ Pagamento ${paymentId} ainda pendente para ${clienteId}`);
         }
+    } else if (notification.topic === 'merchant_order') {
+        console.log("🔍 Webhook do tipo merchant_order. Consultando detalhes...");
+        try {
+            const orderId = notification.resource.split('/').pop();
+            const order = await merchantOrderClient.get({ merchantOrderId: orderId });
+            console.log("📦 Detalhes do merchant_order:", JSON.stringify(order, null, 2));
+
+            const clienteId = order.body.external_reference || null;
+            if (!clienteId) {
+                console.error("❌ Merchant order sem external_reference. Não posso identificar o cliente.");
+                return res.status(400).send("Missing external_reference");
+            }
+
+            const payments = order.body.payments || [];
+            for (const payment of payments) {
+                const paymentId = payment.id;
+                const status = payment.status === 'approved' ? 'approved' : 'pending';
+
+                console.log(`🔍 Pagamento ${paymentId} no merchant_order para cliente ${clienteId}: status ${status}`);
+                if (status === 'approved') {
+                    console.log(`✅ Pagamento ${paymentId} confirmado para ${clienteId}`);
+                    await salvarHistoricoPedido(clienteId, null, null, 'approved');
+                    await client.sendMessage(`${clienteId}@c.us`, "🎉 Pagamento confirmado! Seu pedido está sendo preparado.");
+                } else {
+                    console.log(`⏳ Pagamento ${paymentId} ainda pendente para ${clienteId}`);
+                }
+            }
+        } catch (error) {
+            console.error("❌ Erro ao consultar merchant_order:", error.message);
+        }
+    } else {
+        console.log("⚠️ Webhook não é um pagamento ou formato inesperado.");
     }
 
     res.status(200).send("Webhook recebido");
