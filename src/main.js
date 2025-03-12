@@ -6,13 +6,14 @@ const { MessageMedia } = require('whatsapp-web.js');
 const client = require('./whatsapp');
 const { criarTabelaPedidos, salvarPedido, obterValorPedido, salvarHistoricoPedido } = require('./database');
 const { consultarAssistant } = require('./openai');
-const { gerarQRCodePix, gerarLinkPagamentoCartao } = require('./payment'); // Adicionada esta linha
-const { MercadoPagoConfig, MerchantOrder } = require('mercadopago');
+const { gerarQRCodePix, gerarLinkPagamentoCartao } = require('./payment');
+const { MercadoPagoConfig, MerchantOrder, Payment } = require('mercadopago');
 
 const mpClient = new MercadoPagoConfig({
     accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN,
 });
 const merchantOrderClient = new MerchantOrder(mpClient);
+const paymentClient = new Payment(mpClient);
 
 console.log("🔍 Iniciando bot...");
 console.log("🔍 Caminho do processo:", process.cwd());
@@ -67,8 +68,19 @@ app.post('/webhook', async (req, res) => {
         const clienteId = notification.external_reference || null;
 
         if (!clienteId) {
-            console.error("❌ Webhook sem external_reference. Não posso identificar o cliente.");
-            return res.status(400).send("Missing external_reference");
+            console.error("❌ Webhook sem external_reference. Tentando consultar pagamento...");
+            try {
+                const payment = await paymentClient.get({ id: paymentId });
+                clienteId = payment.body.external_reference || null;
+                if (!clienteId) {
+                    console.error("❌ Pagamento consultado sem external_reference. Não posso identificar o cliente.");
+                    return res.status(400).send("Missing external_reference");
+                }
+                console.log(`🔍 external_reference recuperado do pagamento: ${clienteId}`);
+            } catch (error) {
+                console.error("❌ Erro ao consultar pagamento:", error.message);
+                return res.status(400).send("Error fetching payment");
+            }
         }
 
         console.log(`🔍 Processando pagamento ${paymentId} para cliente ${clienteId}`);
@@ -110,6 +122,29 @@ app.post('/webhook', async (req, res) => {
             }
         } catch (error) {
             console.error("❌ Erro ao consultar merchant_order:", error.message);
+        }
+    } else if (notification.topic === 'payment' && notification.resource) {
+        console.log("🔍 Webhook do tipo payment com resource. Consultando pagamento...");
+        try {
+            const paymentId = notification.resource;
+            const payment = await paymentClient.get({ id: paymentId });
+            const clienteId = payment.body.external_reference || null;
+            if (!clienteId) {
+                console.error("❌ Pagamento consultado sem external_reference. Não posso identificar o cliente.");
+                return res.status(400).send("Missing external_reference");
+            }
+            console.log(`🔍 external_reference recuperado do pagamento: ${clienteId}`);
+            const status = payment.body.status === 'approved' ? 'approved' : 'pending';
+
+            if (status === 'approved') {
+                console.log(`✅ Pagamento ${paymentId} confirmado para ${clienteId}`);
+                await salvarHistoricoPedido(clienteId, null, null, 'approved');
+                await client.sendMessage(`${clienteId}@c.us`, "🎉 Pagamento confirmado! Seu pedido está sendo preparado.");
+            } else {
+                console.log(`⏳ Pagamento ${paymentId} ainda pendente para ${clienteId}`);
+            }
+        } catch (error) {
+            console.error("❌ Erro ao consultar pagamento:", error.message);
         }
     } else {
         console.log("⚠️ Webhook não é um pagamento ou formato inesperado.");
