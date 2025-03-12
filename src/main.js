@@ -8,6 +8,7 @@ const { criarTabelaPedidos, salvarPedido, obterValorPedido, salvarHistoricoPedid
 const { consultarAssistant } = require('./openai');
 const { gerarQRCodePix, gerarLinkPagamentoCartao } = require('./payment');
 const { MercadoPagoConfig, MerchantOrder, Payment } = require('mercadopago');
+const crypto = require('crypto');
 
 const mpClient = new MercadoPagoConfig({
     accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN,
@@ -58,8 +59,31 @@ async function enviarImagem(msg, imagePath, caption) {
     }
 }
 
+function verifyWebhookSignature(req, secret) {
+    const signature = req.headers['x-signature'] || req.headers['x-signature-sha256'];
+    if (!signature) {
+        console.error("⚠️ Assinatura do webhook não encontrada no cabeçalho.");
+        return false;
+    }
+
+    const computedSignature = crypto
+        .createHmac('sha256', secret)
+        .update(JSON.stringify(req.body))
+        .digest('hex');
+
+    console.log(`🔍 Assinatura recebida: ${signature}`);
+    console.log(`🔍 Assinatura computada: ${computedSignature}`);
+    return signature === computedSignature;
+}
+
 app.post('/webhook', async (req, res) => {
     console.log("🔍 Recebendo webhook...");
+    const secret = 'c36ea0a0aabc4259d65c3d3b6fef754e0e36df27b4ebb0f1ced924bea97ba663'; // Assinatura secreta fornecida
+    if (!verifyWebhookSignature(req, secret)) {
+        console.error("❌ Assinatura do webhook inválida. Rejeitando requisição.");
+        return res.status(401).send("Invalid signature");
+    }
+
     const notification = req.body;
     console.log("📥 Webhook recebido:", JSON.stringify(notification, null, 2));
 
@@ -71,6 +95,11 @@ app.post('/webhook', async (req, res) => {
             console.error("❌ Webhook sem external_reference. Tentando consultar pagamento...");
             try {
                 const payment = await paymentClient.get({ id: paymentId });
+                console.log("🔍 Resposta da API do pagamento:", JSON.stringify(payment, null, 2));
+                if (!payment.body || typeof payment.body !== 'object') {
+                    console.error("❌ Resposta da API inválida ou vazia.");
+                    return res.status(400).send("Invalid payment response");
+                }
                 clienteId = payment.body.external_reference || null;
                 if (!clienteId) {
                     console.error("❌ Pagamento consultado sem external_reference. Não posso identificar o cliente.");
@@ -79,7 +108,7 @@ app.post('/webhook', async (req, res) => {
                 console.log(`🔍 external_reference recuperado do pagamento: ${clienteId}`);
             } catch (error) {
                 console.error("❌ Erro ao consultar pagamento:", error.message);
-                return res.status(400).send("Error fetching payment");
+                return res.status(500).send("Error fetching payment");
             }
         }
 
@@ -128,6 +157,11 @@ app.post('/webhook', async (req, res) => {
         try {
             const paymentId = notification.resource;
             const payment = await paymentClient.get({ id: paymentId });
+            console.log("🔍 Resposta da API do pagamento:", JSON.stringify(payment, null, 2));
+            if (!payment.body || typeof payment.body !== 'object') {
+                console.error("❌ Resposta da API inválida ou vazia.");
+                return res.status(400).send("Invalid payment response");
+            }
             const clienteId = payment.body.external_reference || null;
             if (!clienteId) {
                 console.error("❌ Pagamento consultado sem external_reference. Não posso identificar o cliente.");
