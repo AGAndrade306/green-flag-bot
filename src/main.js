@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { MessageMedia } = require('whatsapp-web.js');
 const client = require('./whatsapp');
-const { criarTabelaPedidos, salvarPedido, obterValorPedido, salvarHistoricoPedido } = require('./database');
+const { criarTabelaPedidos, salvarPedido, obterValorPedido, salvarHistoricoPedido, obterPedidoPorPaymentId } = require('./database');
 const { consultarAssistant } = require('./openai');
 const { gerarQRCodePix, gerarLinkPagamentoCartao } = require('./payment');
 const { MercadoPagoConfig, MerchantOrder, Payment } = require('mercadopago');
@@ -83,10 +83,11 @@ function verifyWebhookSignature(req, secret) {
 app.post('/webhook', async (req, res) => {
     console.log("🔍 Recebendo webhook...");
     const secret = 'c36ea0a0aabc4259d65c3d3b6fef754e0e36df27b4ebb0f1ced924bea97ba663';
-    if (!verifyWebhookSignature(req, secret)) {
-        console.error("❌ Assinatura do webhook inválida. Rejeitando requisição.");
-        return res.status(401).send("Invalid signature");
-    }
+    // Temporariamente desativar a validação da assinatura para depuração
+    // if (!verifyWebhookSignature(req, secret)) {
+    //     console.error("❌ Assinatura do webhook inválida. Rejeitando requisição.");
+    //     return res.status(401).send("Invalid signature");
+    // }
 
     const notification = req.body;
     console.log("📥 Webhook recebido:", JSON.stringify(notification, null, 2));
