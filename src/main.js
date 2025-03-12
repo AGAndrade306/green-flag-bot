@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { MessageMedia } = require('whatsapp-web.js');
 const client = require('./whatsapp');
-const { criarTabelaPedidos, salvarPedido, obterValorPedido, salvarHistoricoPedido, obterPedidoPorPaymentId, obterHistoricoPedidos } = require('./database');
+const { criarTabelaPedidos, salvarPedido, obterValorPedido, salvarHistoricoPedido } = require('./database');
 const { consultarAssistant } = require('./openai');
 const { gerarQRCodePix, gerarLinkPagamentoCartao } = require('./payment');
 const { MercadoPagoConfig, MerchantOrder, Payment } = require('mercadopago');
@@ -30,7 +30,6 @@ delete require.cache[require.resolve('./payment')];
 criarTabelaPedidos();
 
 const pedidosPorCliente = {};
-const conversasPorCliente = {};
 const app = express();
 app.use(express.json());
 
@@ -128,9 +127,8 @@ app.post('/webhook', async (req, res) => {
 
         if (status === 'approved') {
             console.log(`✅ Pagamento ${paymentId} confirmado para ${clienteId}`);
-            await salvarHistoricoPedido(clienteId, pedido.nomeCliente, pedido.endereco, pedido.itens, pedido.valor, pedido.metodoPagamento, 'approved', paymentId);
+            await salvarHistoricoPedido(clienteId, pedido.valor, pedido.metodoPagamento, 'approved', paymentId);
             await client.sendMessage(`${clienteId}@c.us`, "🎉 Pagamento confirmado! Seu pedido está sendo preparado.");
-            delete conversasPorCliente[clienteId];
         } else {
             console.log(`⏳ Pagamento ${paymentId} ainda pendente para ${clienteId}`);
         }
@@ -160,9 +158,8 @@ app.post('/webhook', async (req, res) => {
                 console.log(`🔍 Pagamento ${paymentId} no merchant_order para cliente ${clienteId}: status ${status}`);
                 if (status === 'approved') {
                     console.log(`✅ Pagamento ${paymentId} confirmado para ${clienteId}`);
-                    await salvarHistoricoPedido(clienteId, pedido.nomeCliente, pedido.endereco, pedido.itens, pedido.valor, pedido.metodoPagamento, 'approved', paymentId);
+                    await salvarHistoricoPedido(clienteId, pedido.valor, pedido.metodoPagamento, 'approved', paymentId);
                     await client.sendMessage(`${clienteId}@c.us`, "🎉 Pagamento confirmado! Seu pedido está sendo preparado.");
-                    delete conversasPorCliente[clienteId];
                 } else {
                     console.log(`⏳ Pagamento ${paymentId} ainda pendente para ${clienteId}`);
                 }
@@ -196,9 +193,8 @@ app.post('/webhook', async (req, res) => {
             const status = payment.body.status === 'approved' ? 'approved' : 'pending';
             if (status === 'approved') {
                 console.log(`✅ Pagamento ${paymentId} confirmado para ${clienteId}`);
-                await salvarHistoricoPedido(clienteId, pedido.nomeCliente, pedido.endereco, pedido.itens, pedido.valor, pedido.metodoPagamento, 'approved', paymentId);
+                await salvarHistoricoPedido(clienteId, pedido.valor, pedido.metodoPagamento, 'approved', paymentId);
                 await client.sendMessage(`${clienteId}@c.us`, "🎉 Pagamento confirmado! Seu pedido está sendo preparado.");
-                delete conversasPorCliente[clienteId];
             } else {
                 console.log(`⏳ Pagamento ${paymentId} ainda pendente para ${clienteId}`);
             }
@@ -219,150 +215,100 @@ app.listen(PORT, () => {
 
 client.on('message', async msg => {
     if (!msg.from.endsWith('@c.us')) return;
-    const userMessage = msg.body.trim();
+    const userMessage = msg.body.toLowerCase().trim();
     console.log(`📩 Mensagem recebida de ${msg.from}: ${userMessage}`);
 
     const clienteId = msg.from.split('@')[0];
 
     try {
-        if (!conversasPorCliente[clienteId]) {
-            conversasPorCliente[clienteId] = { estado: 'inicio', dados: {} };
-            await client.sendMessage(msg.from, "Olá! Bem-vindo(a) à Green Flag Burgers! 🍔 Para começar, qual é o seu nome?");
-            return;
-        }
-
-        const conversa = conversasPorCliente[clienteId];
-        const estado = conversa.estado;
-
-        if (estado === 'inicio') {
-            conversa.dados.nomeCliente = userMessage;
-            conversa.estado = 'pedido';
-            await client.sendMessage(msg.from, `Prazer em conhecê-lo(a), ${conversa.dados.nomeCliente}! O que você gostaria de pedir hoje? Você pode ver nosso cardápio digitando "cardápio" ou fazer seu pedido diretamente.`);
-            return;
-        }
-
-        if (estado === 'pedido') {
-            if (userMessage.toLowerCase().includes("pode finalizar") || userMessage.toLowerCase().includes("confirmar")) {
-                const valorTotal = pedidosPorCliente[clienteId]?.valorTotal || await obterValorPedido(clienteId);
-                const itens = pedidosPorCliente[clienteId]?.itens || [];
-
-                if (!valorTotal || valorTotal <= 0 || itens.length === 0) {
-                    await client.sendMessage(msg.from, "❌ Nenhum pedido pendente encontrado. Faça um pedido antes de confirmar.");
-                    return;
-                }
-
-                const pedidoSalvo = await salvarPedido(clienteId, conversa.dados.nomeCliente, itens, valorTotal);
-                if (!pedidoSalvo) {
-                    await client.sendMessage(msg.from, "❌ Erro ao salvar o pedido. Tente novamente.");
-                    return;
-                }
-
-                console.log(`✅ Pedido confirmado! Total: R$ ${valorTotal.toFixed(2)}`);
-                conversa.estado = 'endereco';
-                await client.sendMessage(msg.from, "✅ Pedido confirmado! Agora, por favor, me informe seu endereço completo para entrega.");
-                return;
-            }
-
-            const assistantResponse = await consultarAssistant(clienteId, userMessage);
-            if (!assistantResponse) {
-                await client.sendMessage(msg.from, "⚠️ Desculpe, não consegui processar sua mensagem. Tente novamente.");
-                return;
-            }
-            await client.sendMessage(msg.from, assistantResponse);
-
-            if (userMessage.toLowerCase().includes("cardápio") || userMessage.toLowerCase().includes("menu") || userMessage.toLowerCase().includes("hambúrguer")) {
-                for (const [item, fileName] of Object.entries(imagensCardapio)) {
-                    const imagePath = path.join(__dirname, 'src/images', fileName);
-                    await enviarImagem(msg, imagePath, `📸 ${item.charAt(0).toUpperCase() + item.slice(1)}`);
-                }
-            }
-
-            for (const [item, fileName] of Object.entries(imagensCardapio)) {
-                if (userMessage.toLowerCase().includes(item)) {
-                    const imagePath = path.join(__dirname, 'src/images', fileName);
-                    await enviarImagem(msg, imagePath, `📸 Aqui está o seu pedido: ${item.charAt(0).toUpperCase() + item.slice(1)}`);
-                }
-            }
-
-            const valorTotalMatch = assistantResponse.match(/(?:total|valor|R\$)[\s:]*([0-9]+[.,][0-9]{2})/i);
-            const itens = [];
-            for (const item of Object.keys(imagensCardapio)) {
-                const regex = new RegExp(`(\\d+)\\s*(?:x|X)?\\s*${item}`, 'i');
-                const match = assistantResponse.match(regex);
-                if (match) {
-                    const quantidade = parseInt(match[1], 10);
-                    itens.push({ item, quantidade });
-                }
-            }
-
-            if (valorTotalMatch || itens.length > 0) {
-                const valorTotal = valorTotalMatch ? parseFloat(valorTotalMatch[1].replace(',', '.')) : (pedidosPorCliente[clienteId]?.valorTotal || 0);
-                if (!isNaN(valorTotal) && valorTotal > 0) {
-                    pedidosPorCliente[clienteId] = { valorTotal, itens };
-                }
-            }
-
-            return;
-        }
-
-        if (estado === 'endereco') {
-            conversa.dados.endereco = userMessage;
-            conversa.estado = 'pagamento';
+        if (userMessage.includes("pode finalizar") || userMessage.includes("confirmar")) {
             const valorTotal = pedidosPorCliente[clienteId]?.valorTotal || await obterValorPedido(clienteId);
-            await client.sendMessage(msg.from, `✅ Endereço registrado: ${conversa.dados.endereco}. O total do seu pedido é R$ ${valorTotal.toFixed(2)}. Como deseja pagar? Digite "PIX" ou "Cartão".`);
+
+            if (!valorTotal || valorTotal <= 0) {
+                await client.sendMessage(msg.from, "❌ Nenhum pedido pendente encontrado. Faça um pedido antes de confirmar.");
+                return;
+            }
+
+            const pedidoSalvo = await salvarPedido(clienteId, valorTotal);
+            if (!pedidoSalvo) {
+                await client.sendMessage(msg.from, "❌ Erro ao salvar o pedido. Tente novamente.");
+                return;
+            }
+
+            console.log(`✅ Pedido confirmado! Total: R$ ${valorTotal.toFixed(2)}`);
+            await client.sendMessage(msg.from, `✅ Pedido confirmado! Total: R$ ${valorTotal.toFixed(2)}. Como deseja pagar? Digite "PIX" ou "Cartão".`);
             return;
         }
 
-        if (estado === 'pagamento') {
-            if (userMessage.toLowerCase().includes("pix")) {
-                const valorPedido = pedidosPorCliente[clienteId]?.valorTotal || await obterValorPedido(clienteId);
-                const itens = pedidosPorCliente[clienteId]?.itens || [];
-
-                if (!valorPedido || valorPedido <= 0) {
-                    await client.sendMessage(msg.from, "⚠️ Nenhum pedido pendente encontrado para pagamento.");
-                    return;
-                }
-
-                const pixData = await gerarQRCodePix(clienteId, valorPedido);
-                if (!pixData) {
-                    await client.sendMessage(msg.from, "⚠️ Erro ao gerar o PIX. Tente outro método ou fale com o suporte.");
-                    return;
-                }
-
-                const paymentId = pixData.paymentId;
-                await client.sendMessage(msg.from, "💳 PIX Copia e Cola:");
-                await client.sendMessage(msg.from, pixData.pixCopiaCola);
-                await salvarHistoricoPedido(clienteId, conversa.dados.nomeCliente, conversa.dados.endereco, itens, valorPedido, 'PIX', 'pending', paymentId);
-                await client.sendMessage(msg.from, 'Aguardando pagamento. Irei atualizar você assim que for confirmado.');
-                console.log(`📤 Mensagem enviada para ${clienteId}: 'Aguardando pagamento. Irei atualizar você assim que for confirmado.'`);
-                return;
-            }
-
-            if (userMessage.toLowerCase().includes("cartão")) {
-                const valorPedido = pedidosPorCliente[clienteId]?.valorTotal || await obterValorPedido(clienteId);
-                const itens = pedidosPorCliente[clienteId]?.itens || [];
-
-                if (!valorPedido || valorPedido <= 0) {
-                    await client.sendMessage(msg.from, "⚠️ Nenhum pedido pendente encontrado para pagamento.");
-                    return;
-                }
-
-                const linkPagamento = await gerarLinkPagamentoCartao(clienteId, valorPedido);
-                if (!linkPagamento) {
-                    await client.sendMessage(msg.from, "⚠️ Erro ao gerar o link de pagamento com cartão. Tente outro método ou fale com o suporte.");
-                    return;
-                }
-
-                const paymentId = linkPagamento.paymentId;
-                await client.sendMessage(msg.from, `🔗 Link para pagamento com cartão: ${linkPagamento.link}`);
-                await salvarHistoricoPedido(clienteId, conversa.dados.nomeCliente, conversa.dados.endereco, itens, valorPedido, 'Cartão', 'pending', paymentId);
-                await client.sendMessage(msg.from, 'Aguardando pagamento. Irei atualizar você assim que for confirmado.');
-                console.log(`📤 Mensagem enviada para ${clienteId}: 'Aguardando pagamento. Irei atualizar você assim que for confirmado.'`);
-                return;
-            }
-
-            await client.sendMessage(msg.from, "Por favor, escolha uma forma de pagamento válida. Digite 'PIX' ou 'Cartão'.");
+        const assistantResponse = await consultarAssistant(clienteId, userMessage);
+        if (!assistantResponse) {
+            await client.sendMessage(msg.from, "⚠️ Desculpe, não consegui processar sua mensagem. Tente novamente.");
             return;
+        }
+        await client.sendMessage(msg.from, assistantResponse);
+
+        if (userMessage.includes("cardápio") || userMessage.includes("menu") || userMessage.includes("hambúrguer")) {
+            for (const [item, fileName] of Object.entries(imagensCardapio)) {
+                const imagePath = path.join(__dirname, 'src/images', fileName);
+                await enviarImagem(msg, imagePath, `📸 ${item.charAt(0).toUpperCase() + item.slice(1)}`);
+            }
+        }
+
+        for (const [item, fileName] of Object.entries(imagensCardapio)) {
+            if (userMessage.includes(item)) {
+                const imagePath = path.join(__dirname, 'src/images', fileName);
+                await enviarImagem(msg, imagePath, `📸 Aqui está o seu pedido: ${item.charAt(0).toUpperCase() + item.slice(1)}`);
+            }
+        }
+
+        const valorTotalMatch = assistantResponse.match(/(?:total|valor|R\$)[\s:]*([0-9]+[.,][0-9]{2})/i);
+        if (valorTotalMatch) {
+            const valorTotal = parseFloat(valorTotalMatch[1].replace(',', '.'));
+            if (!isNaN(valorTotal) && valorTotal > 0) {
+                pedidosPorCliente[clienteId] = { valorTotal };
+            }
+        }
+
+        if (userMessage.includes("pix")) {
+            const valorPedido = pedidosPorCliente[clienteId]?.valorTotal || await obterValorPedido(clienteId);
+
+            if (!valorPedido || valorPedido <= 0) {
+                await client.sendMessage(msg.from, "⚠️ Nenhum pedido pendente encontrado para pagamento.");
+                return;
+            }
+
+            const pixData = await gerarQRCodePix(clienteId, valorPedido);
+            if (!pixData) {
+                await client.sendMessage(msg.from, "⚠️ Erro ao gerar o PIX. Tente outro método ou fale com o suporte.");
+                return;
+            }
+
+            const paymentId = pixData.paymentId;
+            await client.sendMessage(msg.from, "💳 PIX Copia e Cola:");
+            await client.sendMessage(msg.from, pixData.pixCopiaCola);
+            await salvarHistoricoPedido(clienteId, valorPedido, 'PIX', 'pending', paymentId);
+            await client.sendMessage(msg.from, 'Aguardando pagamento. Irei atualizar você assim que for confirmado.');
+            console.log(`📤 Mensagem enviada para ${clienteId}: 'Aguardando pagamento. Irei atualizar você assim que for confirmado.'`);
+        }
+
+        if (userMessage.includes("cartão")) {
+            const valorPedido = pedidosPorCliente[clienteId]?.valorTotal || await obterValorPedido(clienteId);
+
+            if (!valorPedido || valorPedido <= 0) {
+                await client.sendMessage(msg.from, "⚠️ Nenhum pedido pendente encontrado para pagamento.");
+                return;
+            }
+
+            const linkPagamento = await gerarLinkPagamentoCartao(clienteId, valorPedido);
+            if (!linkPagamento) {
+                await client.sendMessage(msg.from, "⚠️ Erro ao gerar o link de pagamento com cartão. Tente outro método ou fale com o suporte.");
+                return;
+            }
+            const paymentId = linkPagamento.paymentId;
+            await client.sendMessage(msg.from, `🔗 Link para pagamento com cartão: ${linkPagamento.link}`);
+            await salvarHistoricoPedido(clienteId, valorPedido, 'Cartão', 'pending', paymentId);
+            await client.sendMessage(msg.from, 'Aguardando pagamento. Irei atualizar você assim que for confirmado.');
+            console.log(`📤 Mensagem enviada para ${clienteId}: 'Aguardando pagamento. Irei atualizar você assim que for confirmado.'`);
         }
     } catch (error) {
         console.error(`❌ Erro ao processar mensagem de ${clienteId}:`, error);
