@@ -1,87 +1,28 @@
-const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
-const https = require('https');
-const { MercadoPagoConfig, Preference, Payment } = require('mercadopago');
+const { MercadoPagoConfig, Payment, Preference } = require('mercadopago');
 
 const mpClient = new MercadoPagoConfig({
     accessToken: process.env.MERCADO_PAGO_ACCESS_TOKEN,
-    options: { timeout: 5000 }
 });
-const preferenceClient = new Preference(mpClient);
 const paymentClient = new Payment(mpClient);
-console.log("✅ Mercado Pago configurado com MercadoPagoConfig. Token:", process.env.MERCADO_PAGO_ACCESS_TOKEN);
-
-async function gerarLinkPagamentoCartao(clienteId, valor) {
-    try {
-        console.log(`🔍 ClienteId recebido: ${clienteId}`); // Log de debug
-        if (valor <= 0) throw new Error("Valor inválido para pagamento.");
-
-        if (!process.env.MERCADO_PAGO_ACCESS_TOKEN) {
-            throw new Error("Variável de ambiente MERCADO_PAGO_ACCESS_TOKEN não configurada.");
-        }
-
-        const preferenceData = {
-            items: [
-                {
-                    title: `Pedido #${clienteId}`,
-                    unit_price: parseFloat(valor),
-                    quantity: 1,
-                    currency_id: 'BRL',
-                },
-            ],
-            back_urls: {
-                success: 'https://sprout-bot-ymii.onrender.com/success',
-                failure: 'https://sprout-bot-ymii.onrender.com/failure',
-                pending: 'https://sprout-bot-ymii.onrender.com/pending',
-            },
-            auto_return: 'approved',
-            payment_methods: {
-                excluded_payment_methods: [],
-                excluded_payment_types: [],
-                installments: 12,
-            },
-            notification_url: 'https://sprout-bot-ymii.onrender.com/webhook',
-            external_reference: clienteId,
-        };
-
-        console.log("Requisição enviada ao Mercado Pago para Preference:", JSON.stringify(preferenceData, null, 2));
-
-        const response = await preferenceClient.create({ body: preferenceData });
-
-        if (!response || !response.init_point) {
-            throw new Error(`Resposta inválida da API do Mercado Pago. Resposta: ${JSON.stringify(response)}`);
-        }
-
-        console.log(`✅ Link de pagamento gerado para ${clienteId}: ${response.init_point}`);
-        return response.init_point;
-    } catch (error) {
-        console.error(`❌ Erro ao gerar link de pagamento com cartão para ${clienteId}:`, error.message);
-        console.error("Detalhes completos do erro:", error);
-        return null;
-    }
-}
+const preferenceClient = new Preference(mpClient);
 
 async function gerarQRCodePix(clienteId, valor) {
     try {
         console.log(`Iniciando geração de QR Code PIX para ${clienteId}. Valor: ${valor}`);
-        console.log(`🔍 ClienteId recebido: ${clienteId}`); // Log de debug
+        console.log(`🔍 ClienteId recebido: ${clienteId}`);
 
-        if (valor <= 0) throw new Error("Valor inválido para pagamento.");
-
-        if (!process.env.MERCADO_PAGO_ACCESS_TOKEN) {
-            throw new Error("Variável de ambiente MERCADO_PAGO_ACCESS_TOKEN não configurada.");
-        }
-
-        const paymentData = {
-            transaction_amount: parseFloat(valor),
+        const body = {
+            transaction_amount: valor,
             description: `Pedido #${clienteId}`,
             payment_method_id: 'pix',
-            date_of_expiration: new Date(Date.now() + 3600 * 1000).toISOString(),
+            date_of_expiration: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
             notification_url: 'https://sprout-bot-ymii.onrender.com/webhook',
             payer: {
                 email: 'cliente@exemplo.com',
-                identification: { type: 'CPF', number: '12345678909' }
+                identification: {
+                    type: 'CPF',
+                    number: '12345678909'
+                }
             },
             additional_info: {
                 items: [
@@ -90,37 +31,84 @@ async function gerarQRCodePix(clienteId, valor) {
                         title: `Pedido #${clienteId}`,
                         description: 'Compra via bot',
                         quantity: 1,
-                        unit_price: parseFloat(valor)
+                        unit_price: valor
                     }
                 ]
             },
-            external_reference: clienteId,
+            external_reference: clienteId
         };
 
-        console.log("Requisição enviada ao Mercado Pago:", JSON.stringify(paymentData, null, 2));
+        console.log('Requisição enviada ao Mercado Pago:', JSON.stringify(body, null, 2));
+        const response = await paymentClient.create({ body });
+        console.log('Resposta da API do Mercado Pago:', JSON.stringify(response, null, 2));
 
-        const response = await paymentClient.create({ body: paymentData });
-
-        console.log("Resposta da API do Mercado Pago:", JSON.stringify(response, null, 2));
-
-        if (!response || !response.id) {
-            throw new Error(`Resposta inválida da API do Mercado Pago. Resposta: ${JSON.stringify(response)}`);
-        }
-
-        const pixCopiaCola = response.point_of_interaction?.transaction_data?.qr_code;
-        const qrCodeImagem = response.point_of_interaction?.transaction_data?.qr_code_base64;
-
-        if (!pixCopiaCola || !qrCodeImagem) {
-            throw new Error(`Resposta da API não contém PIX Copia e Cola ou QR Code. Resposta: ${JSON.stringify(response)}`);
+        const pixCopiaCola = response.body.point_of_interaction?.transaction_data?.qr_code;
+        if (!pixCopiaCola) {
+            console.error('❌ Resposta do Mercado Pago não contém o QR Code PIX.');
+            return null;
         }
 
         console.log(`✅ QR Code PIX gerado para ${clienteId}: ${pixCopiaCola}`);
-        return { pixCopiaCola, qrCodeImagem };
+        return {
+            pixCopiaCola,
+            paymentId: response.body.id.toString()
+        };
     } catch (error) {
         console.error(`❌ Erro ao gerar QR Code PIX para ${clienteId}:`, error.message);
-        console.error("Detalhes completos do erro:", error);
         return null;
     }
 }
 
-module.exports = { gerarQRCodePix, gerarLinkPagamentoCartao };
+async function gerarLinkPagamentoCartao(clienteId, valor) {
+    try {
+        console.log(`🔍 Gerando link de pagamento com cartão para ${clienteId}. Valor: ${valor}`);
+
+        const body = {
+            items: [
+                {
+                    title: `Pedido #${clienteId}`,
+                    unit_price: valor,
+                    quantity: 1,
+                    currency_id: 'BRL'
+                }
+            ],
+            back_urls: {
+                success: 'https://sprout-bot-ymii.onrender.com/success',
+                failure: 'https://sprout-bot-ymii.onrender.com/failure',
+                pending: 'https://sprout-bot-ymii.onrender.com/pending'
+            },
+            auto_return: 'approved',
+            payment_methods: {
+                excluded_payment_methods: [],
+                excluded_payment_types: [],
+                installments: 12
+            },
+            notification_url: 'https://sprout-bot-ymii.onrender.com/webhook',
+            external_reference: clienteId
+        };
+
+        console.log('Requisição enviada ao Mercado Pago para Preference:', JSON.stringify(body, null, 2));
+        const response = await preferenceClient.create({ body });
+        console.log('Resposta da API do Mercado Pago:', JSON.stringify(response, null, 2));
+
+        const linkPagamento = response.body.init_point;
+        if (!linkPagamento) {
+            console.error('❌ Resposta do Mercado Pago não contém o link de pagamento.');
+            return null;
+        }
+
+        console.log(`✅ Link de pagamento gerado para ${clienteId}: ${linkPagamento}`);
+        return {
+            link: linkPagamento,
+            paymentId: response.body.id
+        };
+    } catch (error) {
+        console.error(`❌ Erro ao gerar link de pagamento com cartão para ${clienteId}:`, error.message);
+        return null;
+    }
+}
+
+module.exports = {
+    gerarQRCodePix,
+    gerarLinkPagamentoCartao
+};
