@@ -40,9 +40,16 @@ async function gerarQRCodePix(clienteId, valor) {
 
         console.log('Requisição enviada ao Mercado Pago:', JSON.stringify(body, null, 2));
         const response = await paymentClient.create({ body });
-        console.log('Resposta da API do Mercado Pago:', JSON.stringify(response, null, 2));
+        console.log('Resposta completa da API do Mercado Pago:', JSON.stringify(response, null, 2));
 
-        const pixCopiaCola = response.body.point_of_interaction?.transaction_data?.qr_code;
+        // Verificar se a resposta tem a estrutura esperada
+        const responseBody = response.body || response;
+        if (!responseBody || !responseBody.point_of_interaction || !responseBody.point_of_interaction.transaction_data) {
+            console.error('❌ Resposta do Mercado Pago não contém point_of_interaction.transaction_data.');
+            return null;
+        }
+
+        const pixCopiaCola = responseBody.point_of_interaction.transaction_data.qr_code;
         if (!pixCopiaCola) {
             console.error('❌ Resposta do Mercado Pago não contém o QR Code PIX.');
             return null;
@@ -51,7 +58,7 @@ async function gerarQRCodePix(clienteId, valor) {
         console.log(`✅ QR Code PIX gerado para ${clienteId}: ${pixCopiaCola}`);
         return {
             pixCopiaCola,
-            paymentId: response.body.id.toString()
+            paymentId: responseBody.id.toString()
         };
     } catch (error) {
         console.error(`❌ Erro ao gerar QR Code PIX para ${clienteId}:`, error.message);
@@ -89,18 +96,20 @@ async function gerarLinkPagamentoCartao(clienteId, valor) {
 
         console.log('Requisição enviada ao Mercado Pago para Preference:', JSON.stringify(body, null, 2));
         const response = await preferenceClient.create({ body });
-        console.log('Resposta da API do Mercado Pago:', JSON.stringify(response, null, 2));
+        console.log('Resposta completa da API do Mercado Pago:', JSON.stringify(response, null, 2));
 
-        const linkPagamento = response.body.init_point;
-        if (!linkPagamento) {
-            console.error('❌ Resposta do Mercado Pago não contém o link de pagamento.');
+        // Verificar se a resposta tem a estrutura esperada
+        const responseBody = response.body || response;
+        if (!responseBody || !responseBody.init_point) {
+            console.error('❌ Resposta do Mercado Pago não contém o link de pagamento (init_point).');
             return null;
         }
 
+        const linkPagamento = responseBody.init_point;
         console.log(`✅ Link de pagamento gerado para ${clienteId}: ${linkPagamento}`);
         return {
             link: linkPagamento,
-            paymentId: response.body.id
+            paymentId: responseBody.id
         };
     } catch (error) {
         console.error(`❌ Erro ao gerar link de pagamento com cartão para ${clienteId}:`, error.message);
