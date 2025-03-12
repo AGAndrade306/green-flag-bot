@@ -14,6 +14,7 @@ console.log("✅ Mercado Pago configurado com MercadoPagoConfig. Token:", proces
 
 async function gerarLinkPagamentoCartao(clienteId, valor) {
     try {
+        console.log(`🔍 ClienteId recebido: ${clienteId}`); // Log de debug
         if (valor <= 0) throw new Error("Valor inválido para pagamento.");
 
         if (!process.env.MERCADO_PAGO_ACCESS_TOKEN) {
@@ -30,9 +31,9 @@ async function gerarLinkPagamentoCartao(clienteId, valor) {
                 },
             ],
             back_urls: {
-                success: 'https://sprout-bot-ymii.onrender.com/success', // Atualizado
-                failure: 'https://sprout-bot-ymii.onrender.com/failure', // Atualizado
-                pending: 'https://sprout-bot-ymii.onrender.com/pending', // Atualizado
+                success: 'https://sprout-bot-ymii.onrender.com/success',
+                failure: 'https://sprout-bot-ymii.onrender.com/failure',
+                pending: 'https://sprout-bot-ymii.onrender.com/pending',
             },
             auto_return: 'approved',
             payment_methods: {
@@ -64,6 +65,7 @@ async function gerarLinkPagamentoCartao(clienteId, valor) {
 async function gerarQRCodePix(clienteId, valor) {
     try {
         console.log(`Iniciando geração de QR Code PIX para ${clienteId}. Valor: ${valor}`);
+        console.log(`🔍 ClienteId recebido: ${clienteId}`); // Log de debug
 
         if (valor <= 0) throw new Error("Valor inválido para pagamento.");
 
