@@ -155,14 +155,14 @@ app.post('/webhook', async (req, res) => {
                     continue;
                 }
 
-                const status = payment.status === 'approved' ? 'approved' : 'pending';
+                const status = payment.status === 'approved' ? 'approved' : payment.status;
                 console.log(`🔍 Pagamento ${paymentId} no merchant_order para cliente ${clienteId}: status ${status}`);
                 if (status === 'approved') {
                     console.log(`✅ Pagamento ${paymentId} confirmado para ${clienteId}`);
                     await salvarHistoricoPedido(clienteId, pedido.valor, pedido.metodoPagamento, 'approved', paymentId);
                     await client.sendMessage(`${clienteId}@c.us`, "🎉 Pagamento confirmado! Seu pedido está sendo preparado.");
                 } else {
-                    console.log(`⏳ Pagamento ${paymentId} ainda pendente para ${clienteId}`);
+                    console.log(`⏳ Pagamento ${paymentId} ainda pendente para ${clienteId} com status: ${status}`);
                 }
             }
         } catch (error) {
@@ -197,7 +197,7 @@ app.post('/webhook', async (req, res) => {
                 await salvarHistoricoPedido(clienteId, pedido.valor, pedido.metodoPagamento, 'approved', paymentId);
                 await client.sendMessage(`${clienteId}@c.us`, "🎉 Pagamento confirmado! Seu pedido está sendo preparado.");
             } else {
-                console.log(`⏳ Pagamento ${paymentId} ainda pendente para ${clienteId}`);
+                console.log(`⏳ Pagamento ${paymentId} ainda pendente para ${clienteId} com status: ${status}`);
             }
         } catch (error) {
             console.error("❌ Erro ao consultar pagamento:", error.message);
